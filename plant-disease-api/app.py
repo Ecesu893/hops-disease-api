@@ -1,7 +1,6 @@
 from flask import Flask, request, jsonify
 import torch
 import torchvision.transforms as transforms
-import torch.nn as nn
 from PIL import Image
 import io
 
@@ -25,11 +24,17 @@ def home():
 
 @app.route('/predict', methods=['POST'])
 def predict():
+    print("📥 İstek geldi!")
+    print("Files:", request.files)
+    print("Form:", request.form)
+
     if 'file' not in request.files:
+        print("❌ Dosya yok!")
         return jsonify({'error': 'Dosya bulunamadı'}), 400
 
     file  = request.files['file']
     image = file.read()
+    print(f"✅ Dosya alındı: {len(image)} bytes")
 
     try:
         img    = Image.open(io.BytesIO(image)).convert("RGB")
@@ -51,6 +56,7 @@ def predict():
             }
         })
     except Exception as e:
+        print(f"❌ Hata: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
