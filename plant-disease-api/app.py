@@ -1,68 +1,77 @@
 from flask import Flask, request, jsonify
+from flask_cors import CORS  # CORS hatalarını engellemek için
 import torch
 import torchvision.transforms as transforms
 from PIL import Image
 import io
 import requests
 
-# Flask objesini en başta tanımlıyoruz (Hata almamak için kritik)
 app = Flask(__name__)
+CORS(app)  # FlutterFlow'dan gelen farklı kökenli istekleri kabul eder
 
+# Sınıf isimleri
 CLASS_NAMES = ["Disease-Downy", "Disease-Powdery", "Healthy", "Insect-Pest"]
 
-# Modeli CPU üzerinde yüklüyoruz (Render Free Tier uyumu için)
+# Modeli yükleme
 try:
     model = torch.jit.load("efficientnet_plant.pt", map_location="cpu")
     model.eval()
-    print("✅ Model başarıyla yüklendi.")
+    print("✅ Model Başarıyla Yüklendi")
 except Exception as e:
-    print(f"❌ Model yükleme hatası: {str(e)}")
+    print(f"❌ Model Yükleme Hatası: {e}")
 
-# Görüntü işleme adımları
+# Görüntü dönüşümü
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                         std=[0.229, 0.224, 0.225])
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
 
 @app.route('/', methods=['GET'])
 def home():
-    return jsonify({'message': 'Hops Disease API çalışıyor!'})
+    return jsonify({'status': 'online', 'message': 'Hops API Hazır!'})
 
-@app.route('/predict', methods=['POST'])
+@app.route('/predict', methods=['POST', 'GET']) # GET desteği de ekledik test için
 def predict():
-    # FlutterFlow'dan gelecek JSON verisini kontrol et
-    data = request.json
-    image_url = data.get('image_url') if data else None
+    image_url = None
+
+    # 1. Adım: Veriyi yakalama (En esnek yöntem)
+    if request.method == 'POST':
+        # Önce JSON kontrolü
+        data = request.get_json(force=True, silent=True)
+        if data:
+            image_url = data.get('image_url')
+        
+        # JSON değilse Form verisi kontrolü
+        if not image_url:
+            image_url = request.form.get('image_url')
+            
+    # 2. Adım: URL parametresi kontrolü (Yedek plan)
+    if not image_url:
+        image_url = request.args.get('image_url')
+
+    if not image_url:
+        return jsonify({
+            'error': 'image_url bulunamadı!',
+            'received_data': str(request.data),
+            'method': request.method
+        }), 400
 
     try:
-        # 1. Senaryo: URL gönderildiyse (Supabase üzerinden)
-        if image_url:
-            resp = requests.get(image_url, timeout=10)
-            img = Image.open(io.BytesIO(resp.content)).convert("RGB")
+        # Resmi indir
+        response = requests.get(image_url, timeout=15)
+        img = Image.open(io.BytesIO(response.content)).convert("RGB")
         
-        # 2. Senaryo: Direkt dosya gönderildiyse (Multipart form)
-        elif 'file' in request.files:
-            file = request.files['file']
-            img = Image.open(io.BytesIO(file.read())).convert("RGB")
-        
-        else:
-            return jsonify({'error': 'Resim URL veya dosya bulunamadı'}), 400
-
-        # Model tahmini
+        # Modeli çalıştır
         tensor = transform(img).unsqueeze(0)
         with torch.no_grad():
             outputs = model(tensor)
             probs = torch.softmax(outputs, dim=1)[0]
-            pred_idx = torch.argmax(probs).item()
+            idx = torch.argmax(probs).item()
             
-            prediction = CLASS_NAMES[pred_idx]
-            confidence = float(probs[pred_idx].item())
-
         return jsonify({
-            'prediction': prediction,
-            'confidence': confidence,
+            'prediction': CLASS_NAMES[idx],
+            'confidence': round(float(probs[idx].item()), 4),
             'status': 'success'
         })
 
@@ -70,4 +79,4 @@ def predict():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(debug=False, host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=10000)
