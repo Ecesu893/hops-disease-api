@@ -1,8 +1,5 @@
---find-links https://download.pytorch.org/whl/cpu/torch_stable.html
+flask
 torch
 torchvision
-flask
-flask-cors
 Pillow
 gunicorn
-requests
