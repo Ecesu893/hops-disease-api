@@ -1,82 +1,74 @@
 from flask import Flask, request, jsonify
-from flask_cors import CORS  # CORS hatalarını engellemek için
 import torch
 import torchvision.transforms as transforms
 from PIL import Image
 import io
-import requests
+import base64
+import urllib.request
 
 app = Flask(__name__)
-CORS(app)  # FlutterFlow'dan gelen farklı kökenli istekleri kabul eder
 
-# Sınıf isimleri
 CLASS_NAMES = ["Disease-Downy", "Disease-Powdery", "Healthy", "Insect-Pest"]
 
-# Modeli yükleme
-try:
-    model = torch.jit.load("efficientnet_plant.pt", map_location="cpu")
-    model.eval()
-    print("✅ Model Başarıyla Yüklendi")
-except Exception as e:
-    print(f"❌ Model Yükleme Hatası: {e}")
+model = torch.jit.load("efficientnet_plant.pt", map_location="cpu")
+model.eval()
 
-# Görüntü dönüşümü
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                         std=[0.229, 0.224, 0.225])
 ])
 
 @app.route('/', methods=['GET'])
 def home():
-    return jsonify({'status': 'online', 'message': 'Hops API Hazır!'})
+    return jsonify({'message': 'Plant Disease API çalışıyor!'})
 
-@app.route('/predict', methods=['POST', 'GET']) # GET desteği de ekledik test için
+@app.route('/predict', methods=['POST'])
 def predict():
-    image_url = None
+    print("📥 İstek geldi!")
+    print("Files:", request.files)
+    print("Form:", request.form)
+    print("JSON:", request.json)
 
-    # 1. Adım: Veriyi yakalama (En esnek yöntem)
-    if request.method == 'POST':
-        # Önce JSON kontrolü
-        data = request.get_json(force=True, silent=True)
-        if data:
-            image_url = data.get('image_url')
+    image_data = None
+
+    # JSON body'den al
+    if request.json and 'image' in request.json:
+        image_str = request.json['image']
+        print(f"📝 JSON image uzunluk: {len(image_str) if image_str else 0}")
         
-        # JSON değilse Form verisi kontrolü
-        if not image_url:
-            image_url = request.form.get('image_url')
-            
-    # 2. Adım: URL parametresi kontrolü (Yedek plan)
-    if not image_url:
-        image_url = request.args.get('image_url')
+        if image_str and image_str.startswith('http'):
+            with urllib.request.urlopen(image_str) as response:
+                image_data = response.read()
+            print(f"✅ URL'den indirildi: {len(image_data)} bytes")
+        elif image_str and ',' in image_str:
+            image_data = base64.b64decode(image_str.split(',')[1])
+            print(f"✅ Base64 data URL'den alındı: {len(image_data)} bytes")
+        elif image_str and len(image_str) > 100:
+            image_data = base64.b64decode(image_str)
+            print(f"✅ Base64'ten alındı: {len(image_data)} bytes")
 
-    if not image_url:
-        return jsonify({
-            'error': 'image_url bulunamadı!',
-            'received_data': str(request.data),
-            'method': request.method
-        }), 400
+    # Multipart form'dan al
+    elif 'file' in request.files and request.files['file'].filename != '':
+        image_data = request.files['file'].read()
+        print(f"✅ Files'tan alındı: {len(image_data)} bytes")
+
+    # Form string'den al
+    elif 'file' in request.form and request.form['file'] != '':
+        file_val = request.form['file']
+        if file_val.startswith('http'):
+            with urllib.request.urlopen(file_val) as response:
+                image_data = response.read()
+        elif ',' in file_val:
+            image_data = base64.b64decode(file_val.split(',')[1])
+        elif len(file_val) > 100:
+            image_data = base64.b64decode(file_val)
+
+    if image_data is None:
+        print("❌ Görsel verisi bulunamadı!")
+        return jsonify({'error': 'Görsel verisi bulunamadı'}), 400
 
     try:
-        # Resmi indir
-        response = requests.get(image_url, timeout=15)
-        img = Image.open(io.BytesIO(response.content)).convert("RGB")
-        
-        # Modeli çalıştır
-        tensor = transform(img).unsqueeze(0)
-        with torch.no_grad():
-            outputs = model(tensor)
-            probs = torch.softmax(outputs, dim=1)[0]
-            idx = torch.argmax(probs).item()
-            
-        return jsonify({
-            'prediction': CLASS_NAMES[idx],
-            'confidence': round(float(probs[idx].item()), 4),
-            'status': 'success'
-        })
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)
+        img = Image.open(io.BytesIO(image_data)).convert("RGB")
+        tensor = transform(img).un
