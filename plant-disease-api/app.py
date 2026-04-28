@@ -1,5 +1,6 @@
 import torch
 import io
+import os  # Port ayarı için gerekli
 from flask import Flask, request, jsonify
 from PIL import Image
 import torchvision.transforms as transforms
@@ -7,11 +8,9 @@ import torchvision.transforms as transforms
 app = Flask(__name__)
 
 # --- YAPILANDIRMA ---
-# Modeli CPU üzerinde çalışmaya zorlayarak yüklüyoruz
 device = torch.device('cpu')
 MODEL_PATH = 'efficientnet_plant.pt'
 
-# Sınıf isimlerin (Tam olarak belirttiğin gibi)
 CLASS_NAMES = [
     "Disease-Downy",
     "Disease-Powdery",
@@ -19,7 +18,6 @@ CLASS_NAMES = [
     "Insect-Pest"
 ]
 
-# Hastalıklar için çözüm önerileri (FlutterFlow'da göstermek için şık bir ekleme)
 REMEDIES = {
     "Disease-Downy": "Bakır bazlı fungisitler uygulayın ve yaprak nemini azaltın.",
     "Disease-Powdery": "Kükürt içerikli ilaçlar kullanın ve hava sirkülasyonunu artırın.",
@@ -29,7 +27,6 @@ REMEDIES = {
 
 # --- MODEL YÜKLEME ---
 try:
-    # map_location=device ile GPU'da eğitilmiş olsa bile CPU'da açıyoruz
     model = torch.jit.load(MODEL_PATH, map_location=device)
     model.eval()
     print("Model başarıyla CPU üzerinde yüklendi.")
@@ -60,7 +57,6 @@ def predict():
     img_bytes = file.read()
     
     try:
-        # Görüntüyü hazırla ve tahmin al
         input_tensor = transform_image(img_bytes)
         
         with torch.no_grad():
@@ -80,6 +76,9 @@ def predict():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+# --- PORT VE ÇALIŞTIRMA AYARI ---
 if __name__ == '__main__':
-    # '0.0.0.0' sayesinde ağdaki diğer cihazlar (telefonun gibi) erişebilir.
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    # Render'ın atadığı portu alıyoruz, yereldeysek 5000'i kullanıyoruz.
+    port = int(os.environ.get('PORT', 5000))
+    # 0.0.0.0 adresi dış dünyadan erişim için kritiktir.
+    app.run(host='0.0.0.0', port=port, debug=False)
