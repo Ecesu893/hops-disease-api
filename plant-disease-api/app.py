@@ -1,17 +1,17 @@
-from flask import Flask, request, jsonify
 import torch
+import io
+from flask import Flask, request, jsonify
 from PIL import Image
 import torchvision.transforms as transforms
-import io
 
 app = Flask(__name__)
 
-# Modeli yükle
-# "efficientnet_plant.pt" dosyasının script ile aynı klasörde olduğundan emin ol.
-model = torch.jit.load('efficientnet_plant.pt')
-model.eval()
+# --- YAPILANDIRMA ---
+# Modeli CPU üzerinde çalışmaya zorlayarak yüklüyoruz
+device = torch.device('cpu')
+MODEL_PATH = 'efficientnet_plant.pt'
 
-# Senin belirlediğin sınıflar
+# Sınıf isimlerin (Tam olarak belirttiğin gibi)
 CLASS_NAMES = [
     "Disease-Downy",
     "Disease-Powdery",
@@ -19,43 +19,67 @@ CLASS_NAMES = [
     "Insect-Pest"
 ]
 
-# Görüntü hazırlama (EfficientNet standartları)
-preprocess = transforms.Compose([
-    transforms.Resize(256),
-    transforms.CenterCrop(224),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-])
+# Hastalıklar için çözüm önerileri (FlutterFlow'da göstermek için şık bir ekleme)
+REMEDIES = {
+    "Disease-Downy": "Bakır bazlı fungisitler uygulayın ve yaprak nemini azaltın.",
+    "Disease-Powdery": "Kükürt içerikli ilaçlar kullanın ve hava sirkülasyonunu artırın.",
+    "Healthy": "Bitki sağlıklı! Düzenli gözleme devam edin.",
+    "Insect-Pest": "Zararlı böcek tespit edildi. Biyoteknik tuzaklar veya uygun ilaçlama yapın."
+}
 
+# --- MODEL YÜKLEME ---
+try:
+    # map_location=device ile GPU'da eğitilmiş olsa bile CPU'da açıyoruz
+    model = torch.jit.load(MODEL_PATH, map_location=device)
+    model.eval()
+    print("Model başarıyla CPU üzerinde yüklendi.")
+except Exception as e:
+    print(f"Model yüklenirken hata oluştu: {e}")
+
+# --- GÖRÜNTÜ ÖN İŞLEME ---
+def transform_image(image_bytes):
+    preprocess = transforms.Compose([
+        transforms.Resize(256),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        transforms.Normalize(
+            mean=[0.485, 0.456, 0.406], 
+            std=[0.229, 0.224, 0.225]
+        ),
+    ])
+    image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+    return preprocess(image).unsqueeze(0)
+
+# --- API ENDPOINT ---
 @app.route('/predict', methods=['POST'])
 def predict():
     if 'file' not in request.files:
-        return jsonify({'error': 'Resim yüklenmedi'}), 400
+        return jsonify({'error': 'Dosya bulunamadı'}), 400
     
     file = request.files['file']
-    image = Image.open(io.BytesIO(file.read())).convert('RGB')
+    img_bytes = file.read()
     
-    # Görüntüyü modele hazırla
-    input_tensor = preprocess(image)
-    input_batch = input_tensor.unsqueeze(0)
+    try:
+        # Görüntüyü hazırla ve tahmin al
+        input_tensor = transform_image(img_bytes)
+        
+        with torch.no_grad():
+            outputs = model(input_tensor)
+            probabilities = torch.nn.functional.softmax(outputs[0], dim=0)
+            confidence, index = torch.max(probabilities, 0)
+        
+        result_class = CLASS_NAMES[index.item()]
+        
+        return jsonify({
+            'status': 'success',
+            'prediction': result_class,
+            'confidence': f"{confidence.item() * 100:.2f}%",
+            'remedy': REMEDIES.get(result_class, "Bilgi bulunamadı.")
+        })
 
-    with torch.no_grad():
-        output = model(input_batch)
-    
-    # Olasılıkları hesapla
-    probabilities = torch.nn.functional.softmax(output[0], dim=0)
-    confidence, index = torch.max(probabilities, 0)
-    
-    result_class = CLASS_NAMES[index.item()]
-    confidence_score = float(confidence.item())
-
-    # FlutterFlow'a dönecek olan JSON verisi
-    return jsonify({
-        'prediction': result_class,
-        'confidence': f"{confidence_score * 100:.2f}%",
-        'status': "Success"
-    })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    # Localde test için 5000 portu, '0.0.0.0' dış erişime izin verir.
-    app.run(host='0.0.0.0', port=5000)
+    # '0.0.0.0' sayesinde ağdaki diğer cihazlar (telefonun gibi) erişebilir.
+    app.run(host='0.0.0.0', port=5000, debug=False)
