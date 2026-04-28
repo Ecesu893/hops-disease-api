@@ -1,6 +1,6 @@
 import torch
 import io
-import os  # Port ayarı için gerekli
+import os
 from flask import Flask, request, jsonify
 from PIL import Image
 import torchvision.transforms as transforms
@@ -26,12 +26,13 @@ REMEDIES = {
 }
 
 # --- MODEL YÜKLEME ---
+# Modelin yüklendiğini loglarda görmek için print ekledik
 try:
     model = torch.jit.load(MODEL_PATH, map_location=device)
     model.eval()
-    print("Model başarıyla CPU üzerinde yüklendi.")
+    print("✓ Model başarıyla CPU üzerinde yüklendi.")
 except Exception as e:
-    print(f"Model yüklenirken hata oluştu: {e}")
+    print(f"X Model yüklenirken hata oluştu: {e}")
 
 # --- GÖRÜNTÜ ÖN İŞLEME ---
 def transform_image(image_bytes):
@@ -47,11 +48,17 @@ def transform_image(image_bytes):
     image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
     return preprocess(image).unsqueeze(0)
 
+# --- ANA SAYFA (404 Hatasını Gidermek İçin) ---
+@app.route('/', methods=['GET'])
+def home():
+    return "<h1>Şerbetçiotu Hastalık Tespit API'si Aktif</h1><p>Tahmin için <b>/predict</b> ucuna POST isteği gönderin.</p>"
+
 # --- API ENDPOINT ---
 @app.route('/predict', methods=['POST'])
 def predict():
+    # FlutterFlow 'file' isminde bir multipart veri göndermeli
     if 'file' not in request.files:
-        return jsonify({'error': 'Dosya bulunamadı'}), 400
+        return jsonify({'error': 'Dosya bulunamadı. Lütfen "file" anahtarı ile bir resim gönderin.'}), 400
     
     file = request.files['file']
     img_bytes = file.read()
@@ -76,9 +83,8 @@ def predict():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-# --- PORT VE ÇALIŞTIRMA AYARI ---
+# --- PORT AYARI ---
 if __name__ == '__main__':
-    # Render'ın atadığı portu alıyoruz, yereldeysek 5000'i kullanıyoruz.
+    # Render PORT çevre değişkenini kullanır, yoksa 5000'de çalışır
     port = int(os.environ.get('PORT', 5000))
-    # 0.0.0.0 adresi dış dünyadan erişim için kritiktir.
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=port)
