@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: hops-disease-api
+    runtime: docker
+    rootDir: plant-disease-api
+    dockerfilePath: ./plant-disease-api/Dockerfile
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: MODEL_PATH
+        value: efficientnet_plant.pt
