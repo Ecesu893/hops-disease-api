@@ -1,10 +1,12 @@
 import io
 import os
 import torch
+import requests
 import torchvision.transforms as transforms
 from PIL import Image
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 app = FastAPI(title="Hops Disease Detection API", version="1.0.0")
 
@@ -72,6 +74,35 @@ def load_model():
         print(f"❌ Model yüklenemedi: {e}")
         raise
 
+def run_inference(image: Image.Image) -> dict:
+    """Ortak tahmin fonksiyonu"""
+    input_tensor = transform(image).unsqueeze(0)
+    with torch.no_grad():
+        outputs = model(input_tensor)
+        probabilities = torch.softmax(outputs, dim=1)[0]
+
+    predicted_idx = torch.argmax(probabilities).item()
+    predicted_class = CLASS_NAMES[predicted_idx]
+    confidence = float(probabilities[predicted_idx])
+
+    all_probs = {
+        CLASS_NAMES[i]: round(float(probabilities[i]), 4)
+        for i in range(len(CLASS_NAMES))
+    }
+
+    info = CLASS_INFO[predicted_class]
+    return {
+        "prediction": predicted_class,
+        "label": info["label"],
+        "type": info["type"],
+        "severity": info["severity"],
+        "confidence": round(confidence, 4),
+        "confidence_percent": round(confidence * 100, 1),
+        "description": info["description"],
+        "recommendation": info["recommendation"],
+        "all_probabilities": all_probs
+    }
+
 @app.on_event("startup")
 async def startup_event():
     load_model()
@@ -84,14 +115,11 @@ def root():
 def health():
     return {"status": "healthy", "model_loaded": model is not None}
 
+# ── Endpoint 1: Dosya yükleme (mobil uygulama gerçek kullanım) ──
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
     if model is None:
         raise HTTPException(status_code=503, detail="Model henüz yüklenmedi")
-
-    # Dosya kontrolü
-    if not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="Sadece görsel dosyaları kabul edilir")
 
     try:
         contents = await file.read()
@@ -99,36 +127,28 @@ async def predict(file: UploadFile = File(...)):
     except Exception:
         raise HTTPException(status_code=400, detail="Görsel okunamadı")
 
-    # Tahmin
     try:
-        input_tensor = transform(image).unsqueeze(0)
-        with torch.no_grad():
-            outputs = model(input_tensor)
-            probabilities = torch.softmax(outputs, dim=1)[0]
+        return run_inference(image)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Tahmin hatası: {str(e)}")
 
-        predicted_idx = torch.argmax(probabilities).item()
-        predicted_class = CLASS_NAMES[predicted_idx]
-        confidence = float(probabilities[predicted_idx])
+# ── Endpoint 2: URL'den görsel (FlutterFlow test için) ──
+class ImageURLRequest(BaseModel):
+    image_url: str
 
-        # Tüm sınıf olasılıkları
-        all_probs = {
-            CLASS_NAMES[i]: round(float(probabilities[i]), 4)
-            for i in range(len(CLASS_NAMES))
-        }
+@app.post("/predict-url")
+async def predict_url(body: ImageURLRequest):
+    if model is None:
+        raise HTTPException(status_code=503, detail="Model henüz yüklenmedi")
 
-        info = CLASS_INFO[predicted_class]
+    try:
+        response = requests.get(body.image_url, timeout=10)
+        response.raise_for_status()
+        image = Image.open(io.BytesIO(response.content)).convert("RGB")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Görsel indirilemedi: {str(e)}")
 
-        return {
-            "prediction": predicted_class,
-            "label": info["label"],
-            "type": info["type"],
-            "severity": info["severity"],
-            "confidence": round(confidence, 4),
-            "confidence_percent": round(confidence * 100, 1),
-            "description": info["description"],
-            "recommendation": info["recommendation"],
-            "all_probabilities": all_probs
-        }
-
+    try:
+        return run_inference(image)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Tahmin hatası: {str(e)}")
