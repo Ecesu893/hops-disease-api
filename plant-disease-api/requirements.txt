@@ -1,5 +1,6 @@
-flask
-torch --index-url https://download.pytorch.org/whl/cpu
-torchvision --index-url https://download.pytorch.org/whl/cpu
-Pillow
-gunicorn
+fastapi==0.111.0
+uvicorn==0.30.1
+python-multipart==0.0.9
+Pillow==10.3.0
+torch==2.3.0
+torchvision==0.18.0
