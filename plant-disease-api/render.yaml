@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: hops-disease-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter          # Ücretsiz plan için "free", ücretli için "starter"
+    healthCheckPath: /health
+    envVars:
+      - key: MODEL_PATH
+        value: efficientnet_plant.pt
