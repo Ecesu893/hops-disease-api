@@ -97,7 +97,7 @@ def run_inference(image: Image.Image) -> dict:
         "type": info["type"],
         "severity": info["severity"],
         "confidence": round(confidence, 4),
-        "confidence_percent": round(confidence * 100, 1),
+        "confidencepercent": round(confidence * 100, 1),
         "description": info["description"],
         "recommendation": info["recommendation"],
         "all_probabilities": all_probs
