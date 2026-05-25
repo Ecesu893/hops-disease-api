@@ -2,6 +2,7 @@ import io
 import os
 import torch
 import requests
+import random
 import torchvision.transforms as transforms
 from PIL import Image
 from fastapi import FastAPI, File, UploadFile, HTTPException
@@ -21,37 +22,88 @@ app.add_middleware(
 # Disease-Downy(0), Disease-Powdery(1), Healthy(2), Insect-Pest(3)
 CLASS_NAMES = ["Disease-Downy", "Disease-Powdery", "Healthy", "Insect-Pest"]
 
+
 CLASS_INFO = {
     "Disease-Downy": {
         "label": "Downy Mildew (Tüylü Küf)",
         "type": "disease",
         "severity": "high",
-        "description": "Yapraklarda sarı-yeşil lekeler ve beyazımsı küf görülür.",
-        "recommendation": "Fungisit uygulaması yapın ve etkilenen yaprakları uzaklaştırın."
+        "description": random.choice([
+            "Yaprak yüzeyinde sarı-yeşil lekeler ve alt bölgelerde beyazımsı mantar oluşumu gözlemlendi.",
+            "Nemli koşullarda gelişen tüylü küf belirtileri tespit edildi.",
+            "Yaprak dokusunda renk değişimi ve küf tabakası oluşumu mevcut.",
+            "Bitkide Downy Mildew kaynaklı fungal enfeksiyon belirtileri görüldü.",
+            "Yaprak altlarında beyaz mantar sporları ve üst yüzeyde sararmalar belirlendi."
+        ]),
+        "recommendation": random.choice([
+            "Etkilenen yaprakları budayın ve uygun fungisit uygulayın.",
+            "Sulama sıklığını azaltarak hava dolaşımını artırın.",
+            "Bakır içerikli veya sistemik fungisit kullanılması önerilir.",
+            "Hastalığın yayılmasını önlemek için enfekte bölgeleri uzaklaştırın.",
+            "Nem oranını kontrol altında tutarak koruyucu ilaçlama yapın."
+        ])
     },
+
     "Disease-Powdery": {
         "label": "Powdery Mildew (Külleme)",
         "type": "disease",
         "severity": "medium",
-        "description": "Yaprak yüzeyinde beyaz pudra görünümünde mantar.",
-        "recommendation": "Sülfür bazlı fungisit uygulayın, hava sirkülasyonunu artırın."
+        "description": random.choice([
+            "Yaprak yüzeyinde beyaz pudramsı mantar tabakası tespit edildi.",
+            "Külleme hastalığına ait tipik beyaz fungal oluşumlar gözlemlendi.",
+            "Bitki üzerinde mantar kaynaklı yüzeysel beyaz lekeler mevcut.",
+            "Yapraklarda un serpilmiş görünüm oluşturan mantar enfeksiyonu bulundu.",
+            "Powdery Mildew belirtileri yaprak yüzeyinde yayılmaya başlamış."
+        ]),
+        "recommendation": random.choice([
+            "Sülfür bazlı fungisit uygulaması önerilir.",
+            "Bitkiler arasındaki hava akışını artırın ve aşırı nemden kaçının.",
+            "Enfekte yaprakları temizleyerek düzenli kontrol sağlayın.",
+            "Doğal veya kimyasal mantar önleyici ürünler kullanılabilir.",
+            "Sabah saatlerinde kontrollü sulama yaparak mantar gelişimini azaltın."
+        ])
     },
+
     "Healthy": {
         "label": "Sağlıklı",
         "type": "healthy",
         "severity": "none",
-        "description": "Yaprak sağlıklı görünüyor.",
-        "recommendation": "Rutin bakıma devam edin."
+        "description": random.choice([
+            "Yaprak yüzeyi sağlıklı ve doğal görünümde.",
+            "Herhangi bir hastalık veya zararlı belirtisi tespit edilmedi.",
+            "Bitki genel olarak sağlıklı gelişim göstermektedir.",
+            "Yaprak dokusunda anormal renk değişimi veya enfeksiyon bulunmuyor.",
+            "Bitki sağlığı açısından olumsuz bir bulgu gözlemlenmedi."
+        ]),
+        "recommendation": random.choice([
+            "Düzenli bakım ve sulama rutinine devam edin.",
+            "Periyodik gözlem yaparak bitki sağlığını koruyun.",
+            "Dengeli gübreleme ve uygun ışık koşulları sağlamaya devam edin.",
+            "Koruyucu bakım uygulamaları ile bitkiyi destekleyin.",
+            "Bitkinin mevcut bakım düzeni korunabilir."
+        ])
     },
+
     "Insect-Pest": {
         "label": "Böcek / Zararlı",
         "type": "pest",
         "severity": "medium",
-        "description": "Yaprakta böcek veya zararlı böcek tespit edildi.",
-        "recommendation": "Pestisit uygulayın ve biyolojik kontrol yöntemlerini değerlendirin."
+        "description": random.choice([
+            "Yaprak üzerinde zararlı böcek aktivitesi tespit edildi.",
+            "Bitki dokusunda böcek kaynaklı hasar belirtileri gözlemlendi.",
+            "Yaprak yüzeyinde zararlı organizma izleri mevcut.",
+            "Böcek veya larva kaynaklı deformasyon belirtileri bulundu.",
+            "Bitkide pest kaynaklı enfestasyon şüphesi oluştu."
+        ]),
+        "recommendation": random.choice([
+            "Uygun pestisit veya biyolojik mücadele yöntemleri uygulayın.",
+            "Zararlı yoğunluğunu azaltmak için enfekte bölgeleri temizleyin.",
+            "Doğal düşman böceklerden yararlanarak biyolojik kontrol sağlayın.",
+            "Bitkiyi düzenli kontrol ederek yayılımı önleyin.",
+            "Neem yağı veya uygun insektisit kullanımı değerlendirilebilir."
+        ])
     }
 }
-
 # Preprocessing - EfficientNet için standart
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
