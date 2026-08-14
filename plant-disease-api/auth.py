@@ -56,10 +56,24 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         detail="Kimlik doğrulanamadı",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("sub")
+        if user_id is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+
+    user = db.query(User).filter(User.id == int(user_id)).first()
+    if user is None:
+        raise credentials_exception
     return user
 
 
 # ---------- Endpoint'ler ----------
+@router.post("/register", status_code=201)
+def register(body: RegisterRequest, db: Session = Depends(get_db)):
+    existing = db.query(User).filter(User.email == body.email.lower()).first()
     if existing:
         raise HTTPException(status_code=409, detail="Bu e-posta zaten kayıtlı")
 
@@ -101,29 +115,15 @@ def get_history(
         "items": [
             {
                 "id": item.id,
-@router.post("/register", status_code=201)
-def register(body: RegisterRequest, db: Session = Depends(get_db)):
                 "prediction_class": item.prediction_class,
                 "confidence_score": item.confidence_score,
-    existing = db.query(User).filter(User.email == body.email.lower()).first()
-    user = db.query(User).filter(User.id == int(user_id)).first()
-    if user is None:
                 "image_url": item.image_url,
-        raise credentials_exception
-    except JWTError:
-        raise credentials_exception
                 "created_at": item.created_at.isoformat(),
-
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
             }
-        user_id = payload.get("sub")
             for item in items
         ],
         "page": page,
-
         "total_items": total,
-
     }
 
 
@@ -157,12 +157,8 @@ def delete_history(
         .first()
     )
     if not record:
-
         raise HTTPException(status_code=404, detail="Kayıt bulunamadı")
 
-
     db.delete(record)
-
     db.commit()
-
     return {"message": "Silindi"}
