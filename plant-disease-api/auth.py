@@ -21,9 +21,14 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, password_hash: str) -> bool:
-    return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+    try:
+        return bcrypt.checkpw(password.strip().encode("utf-8"), password_hash.strip().encode("utf-8"))
+    except Exception:
+        return False
 
-router = APIRouter(prefix="/api", tags=["auth"])
+
+# main.py içinde prefix="/api" verildiği için burada prefix kaldırıldı:
+router = APIRouter(tags=["auth"])
 
 
 # ---------- Şemalar ----------
@@ -77,27 +82,38 @@ def get_current_user(
 # ---------- Endpoint'ler ----------
 @router.post("/register", status_code=201)
 def register(body: RegisterRequest, db: Session = Depends(get_db)):
-    existing = db.query(User).filter(User.email == body.email.lower()).first()
+    email_clean = body.email.strip().lower()
+    existing = db.query(User).filter(User.email == email_clean).first()
     if existing:
         raise HTTPException(status_code=409, detail="Bu e-posta zaten kayıtlı")
 
-    user = User(email=body.email.lower(), password_hash=hash_password(body.password))
+    user = User(email=email_clean, password_hash=hash_password(body.password))
     db.add(user)
     db.commit()
     db.refresh(user)
 
     token = create_access_token(user.id)
-    return {"access_token": token, "token_type": "bearer", "user": {"id": user.id, "email": user.email}}
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {"id": user.id, "email": user.email},
+    }
 
 
 @router.post("/login")
 def login(body: LoginRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == body.email.lower()).first()
+    email_clean = body.email.strip().lower()
+    user = db.query(User).filter(User.email == email_clean).first()
+    
     if not user or not verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=401, detail="E-posta veya şifre hatalı")
 
     token = create_access_token(user.id)
-    return {"access_token": token, "token_type": "bearer", "user": {"id": user.id, "email": user.email}}
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {"id": user.id, "email": user.email},
+    }
 
 
 @router.get("/history")
