@@ -5,9 +5,14 @@ import requests
 import random
 import torchvision.transforms as transforms
 from PIL import Image
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from models import get_db, init_db, ScanHistory
+from auth import router as auth_router, get_current_user
+from models import User
 
 app = FastAPI(title="Hops Disease Detection API", version="1.0.0")
 
@@ -17,6 +22,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Auth + history endpoint'lerini bağla
+app.include_router(auth_router)
 
 # Sınıf isimleri — ImageFolder'ın alfabetik sırası ile eşleşiyor:
 # Disease-Downy(0), Disease-Powdery(1), Healthy(2), Insect-Pest(3)
@@ -43,14 +51,16 @@ CLASS_INFO = {
             "Nem oranını kontrol altında tutarak koruyucu ilaçlama yapın."
         ])
     },
-
     "Disease-Powdery": {
         "label": "Powdery Mildew (Külleme)",
+
         "type": "disease",
         "severity": "medium",
+
         "description": random.choice([
             "Yaprak yüzeyinde beyaz pudramsı mantar tabakası tespit edildi.",
             "Külleme hastalığına ait tipik beyaz fungal oluşumlar gözlemlendi.",
+
             "Bitki üzerinde mantar kaynaklı yüzeysel beyaz lekeler mevcut.",
             "Yapraklarda un serpilmiş görünüm oluşturan mantar enfeksiyonu bulundu.",
             "Powdery Mildew belirtileri yaprak yüzeyinde yayılmaya başlamış."
@@ -158,6 +168,7 @@ def run_inference(image: Image.Image) -> dict:
 @app.on_event("startup")
 async def startup_event():
     load_model()
+    init_db()  # tabloları oluştur (users, scan_history)
 
 @app.get("/")
 def root():
@@ -168,8 +179,14 @@ def health():
     return {"status": "healthy", "model_loaded": model is not None}
 
 # ── Endpoint 1: Dosya yükleme (mobil uygulama gerçek kullanım) ──
+# Artık giriş yapılmış kullanıcı gerektiriyor (Depends(get_current_user))
+# ve tahmin sonucu otomatik olarak scan_history tablosuna kaydediliyor.
 @app.post("/predict")
-async def predict(file: UploadFile = File(...)):
+async def predict(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     if model is None:
         raise HTTPException(status_code=503, detail="Model henüz yüklenmedi")
 
@@ -180,16 +197,32 @@ async def predict(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Görsel okunamadı")
 
     try:
-        return run_inference(image)
+        result = run_inference(image)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Tahmin hatası: {str(e)}")
+
+    # Sonucu kullanıcının geçmişine kaydet
+    record = ScanHistory(
+        user_id=current_user.id,
+        prediction_class=result["prediction"],
+        confidence_score=result["confidence"],
+        image_url=None,  # dosya yükleme akışında görsel URL'i yok; istersen ayrıca bir storage'a yükleyip buraya URL geçebilirsin
+    )
+    db.add(record)
+    db.commit()
+
+    return result
 
 # ── Endpoint 2: URL'den görsel (FlutterFlow test için) ──
 class ImageURLRequest(BaseModel):
     image_url: str
 
 @app.post("/predict-url")
-async def predict_url(body: ImageURLRequest):
+async def predict_url(
+    body: ImageURLRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     if model is None:
         raise HTTPException(status_code=503, detail="Model henüz yüklenmedi")
 
@@ -201,6 +234,17 @@ async def predict_url(body: ImageURLRequest):
         raise HTTPException(status_code=400, detail=f"Görsel indirilemedi: {str(e)}")
 
     try:
-        return run_inference(image)
+        result = run_inference(image)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Tahmin hatası: {str(e)}")
+
+    record = ScanHistory(
+        user_id=current_user.id,
+        prediction_class=result["prediction"],
+        confidence_score=result["confidence"],
+        image_url=body.image_url,
+    )
+    db.add(record)
+    db.commit()
+
+    return result
