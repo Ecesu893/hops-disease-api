@@ -1,9 +1,9 @@
 import os
+import bcrypt
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
-from passlib.context import CryptContext
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
@@ -13,8 +13,15 @@ SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "dev-secret-degistir")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 gün
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/login")
+
+
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
 
 router = APIRouter(prefix="/api", tags=["auth"])
 
@@ -49,28 +56,14 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         detail="Kimlik doğrulanamadı",
         headers={"WWW-Authenticate": "Bearer"},
     )
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id = payload.get("sub")
-        if user_id is None:
-            raise credentials_exception
-    except JWTError:
-        raise credentials_exception
-
-    user = db.query(User).filter(User.id == int(user_id)).first()
-    if user is None:
-        raise credentials_exception
     return user
 
 
 # ---------- Endpoint'ler ----------
-@router.post("/register", status_code=201)
-def register(body: RegisterRequest, db: Session = Depends(get_db)):
-    existing = db.query(User).filter(User.email == body.email.lower()).first()
     if existing:
         raise HTTPException(status_code=409, detail="Bu e-posta zaten kayıtlı")
 
-    user = User(email=body.email.lower(), password_hash=pwd_context.hash(body.password))
+    user = User(email=body.email.lower(), password_hash=hash_password(body.password))
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -82,7 +75,7 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
 @router.post("/login")
 def login(body: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == body.email.lower()).first()
-    if not user or not pwd_context.verify(body.password, user.password_hash):
+    if not user or not verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=401, detail="E-posta veya şifre hatalı")
 
     token = create_access_token(user.id)
@@ -108,15 +101,29 @@ def get_history(
         "items": [
             {
                 "id": item.id,
+@router.post("/register", status_code=201)
+def register(body: RegisterRequest, db: Session = Depends(get_db)):
                 "prediction_class": item.prediction_class,
                 "confidence_score": item.confidence_score,
+    existing = db.query(User).filter(User.email == body.email.lower()).first()
+    user = db.query(User).filter(User.id == int(user_id)).first()
+    if user is None:
                 "image_url": item.image_url,
+        raise credentials_exception
+    except JWTError:
+        raise credentials_exception
                 "created_at": item.created_at.isoformat(),
+
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
             }
+        user_id = payload.get("sub")
             for item in items
         ],
         "page": page,
+
         "total_items": total,
+
     }
 
 
@@ -150,8 +157,12 @@ def delete_history(
         .first()
     )
     if not record:
+
         raise HTTPException(status_code=404, detail="Kayıt bulunamadı")
 
+
     db.delete(record)
+
     db.commit()
+
     return {"message": "Silindi"}
