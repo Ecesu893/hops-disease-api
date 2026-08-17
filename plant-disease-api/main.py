@@ -1,5 +1,6 @@
 import io
 import os
+import uuid
 import torch
 import requests
 import random
@@ -7,6 +8,7 @@ import torchvision.transforms as transforms
 from PIL import Image
 from fastapi import FastAPI, File, UploadFile, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -23,13 +25,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 1. Yüklenen fotoğrafların kaydedileceği klasörü oluştur ve dışarıya aç
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+
 # Auth + history endpoint'lerini bağla
 app.include_router(auth_router, prefix="/api")
 
-# Sınıf isimleri — ImageFolder'ın alfabetik sırası ile eşleşiyor:
-# Disease-Downy(0), Disease-Powdery(1), Healthy(2), Insect-Pest(3)
+# Sınıf isimleri
 CLASS_NAMES = ["Disease-Downy", "Disease-Powdery", "Healthy", "Insect-Pest"]
-
 
 CLASS_INFO = {
     "Disease-Downy": {
@@ -51,7 +56,6 @@ CLASS_INFO = {
             "Nem oranını kontrol altında tutarak koruyucu ilaçlama yapın."
         ])
     },
-
     "Disease-Powdery": {
         "label": "Powdery Mildew (Külleme)",
         "type": "disease",
@@ -71,7 +75,6 @@ CLASS_INFO = {
             "Sabah saatlerinde kontrollü sulama yaparak mantar gelişimini azaltın."
         ])
     },
-
     "Healthy": {
         "label": "Sağlıklı",
         "type": "healthy",
@@ -91,7 +94,6 @@ CLASS_INFO = {
             "Bitkinin mevcut bakım düzeni korunabilir."
         ])
     },
-
     "Insect-Pest": {
         "label": "Böcek / Zararlı",
         "type": "pest",
@@ -112,7 +114,8 @@ CLASS_INFO = {
         ])
     }
 }
-# Preprocessing - EfficientNet için standart
+
+# Preprocessing
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
@@ -129,9 +132,9 @@ def load_model():
     try:
         model = torch.jit.load(MODEL_PATH, map_location=torch.device("cpu"))
         model.eval()
-        print(f"✅ Model yüklendi: {MODEL_PATH}")
+        print(f"Model yüklendi: {MODEL_PATH}")
     except Exception as e:
-        print(f"❌ Model yüklenemedi: {e}")
+        print(f"Model yüklenemedi: {e}")
         raise
 
 def run_inference(image: Image.Image) -> dict:
@@ -166,7 +169,7 @@ def run_inference(image: Image.Image) -> dict:
 @app.on_event("startup")
 async def startup_event():
     load_model()
-    init_db()  # tabloları oluştur (users, scan_history)
+    init_db()
 
 @app.get("/")
 def root():
@@ -176,9 +179,7 @@ def root():
 def health():
     return {"status": "healthy", "model_loaded": model is not None}
 
-# ── Endpoint 1: Dosya yükleme (mobil uygulama gerçek kullanım) ──
-# Artık giriş yapılmış kullanıcı gerektiriyor (Depends(get_current_user))
-# ve tahmin sonucu otomatik olarak scan_history tablosuna kaydediliyor.
+# ── Endpoint 1: Dosya yükleme (Görseli kaydedip linkini DB'ye yazar) ──
 @app.post("/predict")
 async def predict(
     file: UploadFile = File(...),
@@ -194,24 +195,39 @@ async def predict(
     except Exception:
         raise HTTPException(status_code=400, detail="Görsel okunamadı")
 
+    # 1. Dosyayı benzersiz bir isimle uploads klasörüne kaydet
+    file_ext = os.path.splitext(file.filename)[1] or ".jpg"
+    unique_filename = f"{uuid.uuid4().hex}{file_ext}"
+    file_save_path = os.path.join(UPLOAD_DIR, unique_filename)
+
+    with open(file_save_path, "wb") as f:
+        f.write(contents)
+
+    # 2. Dışarıdan erişilebilir tam URL oluştur
+    base_url = "https://plant-disease-api-gicm.onrender.com"
+    full_image_url = f"{base_url}/uploads/{unique_filename}"
+
+    # 3. Modeli çalıştır
     try:
         result = run_inference(image)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Tahmin hatası: {str(e)}")
 
-    # Sonucu kullanıcının geçmişine kaydet
+    # 4. DB'ye kaydederken image_url alanına adresi yaz
     record = ScanHistory(
         user_id=current_user.id,
         prediction_class=result["prediction"],
         confidence_score=result["confidence"],
-        image_url=None,  # dosya yükleme akışında görsel URL'i yok; istersen ayrıca bir storage'a yükleyip buraya URL geçebilirsin
+        image_url=full_image_url,
     )
     db.add(record)
     db.commit()
 
+    # Yanıta da görsel linkini ekle
+    result["image_url"] = full_image_url
     return result
 
-# ── Endpoint 2: URL'den görsel (FlutterFlow test için) ──
+# ── Endpoint 2: URL'den görsel ──
 class ImageURLRequest(BaseModel):
     image_url: str
 
@@ -245,4 +261,5 @@ async def predict_url(
     db.add(record)
     db.commit()
 
+    result["image_url"] = body.image_url
     return result
