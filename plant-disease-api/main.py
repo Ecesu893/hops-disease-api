@@ -10,11 +10,11 @@ from fastapi import FastAPI, File, UploadFile, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from models import get_db, init_db, ScanHistory
+from models import engine, get_db, init_db, ScanHistory, User
 from auth import router as auth_router, get_current_user
-from models import User
 
 app = FastAPI(title="Hops Disease Detection API", version="1.0.0")
 
@@ -170,6 +170,16 @@ def run_inference(image: Image.Image) -> dict:
 async def startup_event():
     load_model()
     init_db()
+    
+    # Soft delete sütunlarını otomatik ekleyen migration kontrolü
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE;"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP NULL;"))
+            conn.commit()
+        print("Veritabanı soft delete sütun kontrolü başarıyla tamamlandı.")
+    except Exception as e:
+        print(f"Sütun kontrolü sırasında bilgi/uyarı: {e}")
 
 @app.get("/")
 def root():
@@ -179,7 +189,7 @@ def root():
 def health():
     return {"status": "healthy", "model_loaded": model is not None}
 
-# ── Endpoint 1: Dosya yükleme (Görseli kaydedip linkini DB'ye yazar) ──
+# ─── Endpoint 1: Dosya yükleme (Görseli kaydedip linkini DB'ye yazar) ───
 @app.post("/predict")
 async def predict(
     file: UploadFile = File(...),
@@ -227,7 +237,7 @@ async def predict(
     result["image_url"] = full_image_url
     return result
 
-# ── Endpoint 2: URL'den görsel ──
+# ─── Endpoint 2: URL'den görsel ───
 class ImageURLRequest(BaseModel):
     image_url: str
 

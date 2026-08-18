@@ -74,8 +74,11 @@ def get_current_user(
         raise credentials_exception
 
     user = db.query(User).filter(User.id == int(user_id)).first()
-    if user is None:
+    
+    # Kullanıcı yoksa veya soft delete ile silinmişse yetkilendirme verme
+    if user is None or user.is_deleted:
         raise credentials_exception
+        
     return user
 
 
@@ -108,12 +111,28 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
     if not user or not verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=401, detail="E-posta veya şifre hatalı")
 
+    # Silinmiş hesap giriş kontrolü
+    if user.is_deleted:
+        raise HTTPException(status_code=403, detail="Bu hesap silinmiştir")
+
     token = create_access_token(user.id)
     return {
         "access_token": token,
         "token_type": "bearer",
         "user": {"id": user.id, "email": user.email},
     }
+
+
+# ---------- Soft Delete (Hesap Silme) Endpoint'i ----------
+@router.delete("/account/delete")
+def delete_account(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    current_user.is_deleted = True
+    current_user.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"status": "ok", "message": "Hesap başarıyla silindi"}
 
 
 @router.get("/history")
