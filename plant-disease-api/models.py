@@ -37,6 +37,10 @@ class ScanHistory(Base):
     confidence_score = Column(Float, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
+    # Soft Delete alanları eklendi
+    is_deleted = Column(Boolean, default=False, nullable=False)
+    deleted_at = Column(DateTime, nullable=True)
+
     user = relationship("User", back_populates="scans")
 
 

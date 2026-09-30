@@ -27,7 +27,6 @@ def verify_password(password: str, password_hash: str) -> bool:
         return False
 
 
-# main.py içinde prefix="/api" verildiği için burada prefix kaldırıldı:
 router = APIRouter(tags=["auth"])
 
 
@@ -75,7 +74,6 @@ def get_current_user(
 
     user = db.query(User).filter(User.id == int(user_id)).first()
     
-    # Kullanıcı yoksa veya soft delete ile silinmişse yetkilendirme verme
     if user is None or user.is_deleted:
         raise credentials_exception
         
@@ -111,7 +109,6 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
     if not user or not verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=401, detail="E-posta veya şifre hatalı")
 
-    # Silinmiş hesap giriş kontrolü
     if user.is_deleted:
         raise HTTPException(status_code=403, detail="Bu hesap silinmiştir")
 
@@ -123,7 +120,6 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
     }
 
 
-# ---------- Soft Delete (Hesap Silme) Endpoint'i ----------
 @router.delete("/account/delete")
 def delete_account(
     current_user: User = Depends(get_current_user),
@@ -142,9 +138,10 @@ def get_history(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    # Sadece silinmemiş tarama geçmişlerini getiriyoruz
     query = (
         db.query(ScanHistory)
-        .filter(ScanHistory.user_id == current_user.id)
+        .filter(ScanHistory.user_id == current_user.id, ScanHistory.is_deleted == False)
         .order_by(ScanHistory.created_at.desc())
     )
     total = query.count()
@@ -198,6 +195,9 @@ def delete_history(
     if not record:
         raise HTTPException(status_code=404, detail="Kayıt bulunamadı")
 
-    db.delete(record)
+    # Soft Delete işlemi uygulandı
+    record.is_deleted = True
+    record.deleted_at = datetime.now(timezone.utc)
     db.commit()
-    return {"message": "Silindi"}
+    
+    return {"message": "Tarama geçmişi başarıyla silindi"}
