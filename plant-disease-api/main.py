@@ -4,8 +4,11 @@ import uuid
 import torch
 import requests
 import random
+import cv2
+import numpy as np
 import torchvision.transforms as transforms
-from PIL import Image
+from PIL import Image, ImageEnhance
+from rembg import remove
 from fastapi import FastAPI, File, UploadFile, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -30,7 +33,7 @@ UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
-# Auth + history endpoint'lerini bağla
+# Auth + history endpoint'lerini başlat
 app.include_router(auth_router, prefix="/api")
 
 # Sınıf isimleri
@@ -46,7 +49,7 @@ CLASS_INFO = {
             "Nemli koşullarda gelişen tüylü küf belirtileri tespit edildi.",
             "Yaprak dokusunda renk değişimi ve küf tabakası oluşumu mevcut.",
             "Bitkide Downy Mildew kaynaklı fungal enfeksiyon belirtileri görüldü.",
-            "Yaprak altlarında beyaz mantar sporları ve üst yüzeyde sararmalar belirlendi."
+            "Yaprak altlarında beyaz mantar sporları ve üst yüzde sararmalar belirlendi."
         ]),
         "recommendation": random.choice([
             "Etkilenen yaprakları budayın ve uygun fungisit uygulayın.",
@@ -137,6 +140,40 @@ def load_model():
         print(f"Model yüklenemedi: {e}")
         raise
 
+# --- YENİ EKLENEN GÖRÜNTÜ İŞLEME VE ÖN İŞLEME FONKSİYONU ---
+def enhance_and_preprocess_image(image_bytes: bytes) -> Image.Image:
+    """
+    1. rembg ile arka planı temizleyip bitkiyi öne çıkarır.
+    2. Pillow ve OpenCV ile ışık/kontrast dengesini ayarlayıp yaprak detaylarını keskinleştirir.
+    """
+    try:
+        input_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+
+        # 1. Akıllı Arka Plan Kaldırma
+        output_rgba = remove(input_image)
+        background = Image.new("RGB", output_rgba.size, (255, 255, 255))
+        background.paste(output_rgba, mask=output_rgba.split()[3])
+        processed_img = background
+
+        # 2. Kontrast ve Parlaklık Dengeleme (Güneşli/gölgeli ortamlar için)
+        enhancer_contrast = ImageEnhance.Contrast(processed_img)
+        processed_img = enhancer_contrast.enhance(1.2)
+
+        enhancer_brightness = ImageEnhance.Brightness(processed_img)
+        processed_img = enhancer_brightness.enhance(1.05)
+
+        # 3. OpenCV ile Gürültü Azaltma (Denoise)
+        open_cv_image = np.array(processed_img)
+        open_cv_image = cv2.cvtColor(open_cv_image, cv2.COLOR_RGB2BGR)
+        open_cv_image = cv2.GaussianBlur(open_cv_image, (3, 3), 0)
+        final_image = Image.fromarray(cv2.cvtColor(open_cv_image, cv2.COLOR_BGR2RGB))
+
+        return final_image
+    except Exception as e:
+        print(f"Görüntü ön işleme hatası: {e}, orijinal görsel kullanılıyor.")
+        return Image.open(io.BytesIO(image_bytes)).convert("RGB")
+
+
 def run_inference(image: Image.Image) -> dict:
     """Ortak tahmin fonksiyonu"""
     input_tensor = transform(image).unsqueeze(0)
@@ -189,7 +226,7 @@ def root():
 def health():
     return {"status": "healthy", "model_loaded": model is not None}
 
-# ─── Endpoint 1: Dosya yükleme (Görseli kaydedip linkini DB'ye yazar) ───
+# --- Endpoint 1: Dosya yükleme (Ön işleme eklendi) ---
 @app.post("/predict")
 async def predict(
     file: UploadFile = File(...),
@@ -201,11 +238,10 @@ async def predict(
 
     try:
         contents = await file.read()
-        image = Image.open(io.BytesIO(contents)).convert("RGB")
     except Exception:
         raise HTTPException(status_code=400, detail="Görsel okunamadı")
 
-    # 1. Dosyayı benzersiz bir isimle uploads klasörüne kaydet
+    # 1. Dosyayı benzersiz bir isimle uploads klasörüne kaydet (orijinal halini saklıyoruz)
     file_ext = os.path.splitext(file.filename)[1] or ".jpg"
     unique_filename = f"{uuid.uuid4().hex}{file_ext}"
     file_save_path = os.path.join(UPLOAD_DIR, unique_filename)
@@ -217,13 +253,16 @@ async def predict(
     base_url = "https://plant-disease-api-gicm.onrender.com"
     full_image_url = f"{base_url}/uploads/{unique_filename}"
 
-    # 3. Modeli çalıştır
+    # 3. Görseli modele vermeden önce arka planı temizle ve ışık/kontrast ayarla
+    processed_image = enhance_and_preprocess_image(contents)
+
+    # 4. Modeli çalıştır
     try:
-        result = run_inference(image)
+        result = run_inference(processed_image)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Tahmin hatası: {str(e)}")
 
-    # 4. DB'ye kaydederken image_url alanına adresi yaz
+    # 5. DB'ye kaydet
     record = ScanHistory(
         user_id=current_user.id,
         prediction_class=result["prediction"],
@@ -233,11 +272,10 @@ async def predict(
     db.add(record)
     db.commit()
 
-    # Yanıta da görsel linkini ekle
     result["image_url"] = full_image_url
     return result
 
-# ─── Endpoint 2: URL'den görsel ───
+# --- Endpoint 2: URL'den görsel (Ön işleme eklendi) ---
 class ImageURLRequest(BaseModel):
     image_url: str
 
@@ -253,12 +291,15 @@ async def predict_url(
     try:
         response = requests.get(body.image_url, timeout=10)
         response.raise_for_status()
-        image = Image.open(io.BytesIO(response.content)).convert("RGB")
+        image_bytes = response.content
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Görsel indirilemedi: {str(e)}")
 
+    # Arka planı temizle ve optimize et
+    processed_image = enhance_and_preprocess_image(image_bytes)
+
     try:
-        result = run_inference(image)
+        result = run_inference(processed_image)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Tahmin hatası: {str(e)}")
 
