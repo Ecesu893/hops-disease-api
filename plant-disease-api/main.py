@@ -8,7 +8,6 @@ import cv2
 import numpy as np
 import torchvision.transforms as transforms
 from PIL import Image, ImageEnhance
-from rembg import remove
 from fastapi import FastAPI, File, UploadFile, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -126,7 +125,7 @@ transform = transforms.Compose([
                          std=[0.229, 0.224, 0.225])
 ])
 
-# Model Yükleme (Lazy Loading: Sunucu açılışında değil, ilk istek geldiğinde yüklenir)
+# Model Yükleme (Lazy Loading: İlk istekte yüklenecek, sunucu açılışını geciktirmeyecek)
 MODEL_PATH = os.environ.get("MODEL_PATH", "efficientnet_plant.pt")
 model = None
 
@@ -143,26 +142,19 @@ def get_model():
             raise HTTPException(status_code=500, detail=f"Model yüklenemedi: {str(e)}")
     return model
 
-# Görüntü Ön İşleme (Güvenli mod ile)
+# Görüntü Ön İşleme (Pillow ve OpenCV ile Hızlı ve Güvenli Optimizasyon)
 def enhance_and_preprocess_image(image_bytes: bytes) -> Image.Image:
     try:
         input_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
 
-        try:
-            output_rgba = remove(input_image)
-            background = Image.new("RGB", output_rgba.size, (255, 255, 255))
-            background.paste(output_rgba, mask=output_rgba.split()[3])
-            processed_img = background
-        except Exception as rembg_err:
-            print(f"rembg atlandı: {rembg_err}")
-            processed_img = input_image
-
-        enhancer_contrast = ImageEnhance.Contrast(processed_img)
+        # Kontrast ve Parlaklık Dengeleme
+        enhancer_contrast = ImageEnhance.Contrast(input_image)
         processed_img = enhancer_contrast.enhance(1.2)
 
         enhancer_brightness = ImageEnhance.Brightness(processed_img)
         processed_img = enhancer_brightness.enhance(1.05)
 
+        # OpenCV ile Gürültü Azaltma (Denoise)
         open_cv_image = np.array(processed_img)
         open_cv_image = cv2.cvtColor(open_cv_image, cv2.COLOR_RGB2BGR)
         open_cv_image = cv2.GaussianBlur(open_cv_image, (3, 3), 0)
