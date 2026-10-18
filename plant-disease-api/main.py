@@ -126,26 +126,28 @@ transform = transforms.Compose([
                          std=[0.229, 0.224, 0.225])
 ])
 
-# Model yükleme
+# Model Yükleme (Lazy Loading: Sunucu açılışında değil, ilk istek geldiğinde yüklenir)
 MODEL_PATH = os.environ.get("MODEL_PATH", "efficientnet_plant.pt")
 model = None
 
-def load_model():
+def get_model():
     global model
-    try:
-        model = torch.jit.load(MODEL_PATH, map_location=torch.device("cpu"))
-        model.eval()
-        print(f"Model yüklendi: {MODEL_PATH}")
-    except Exception as e:
-        print(f"Model yüklenemedi: {e}")
-        raise
+    if model is None:
+        try:
+            print("Model yükleniyor...")
+            model = torch.jit.load(MODEL_PATH, map_location=torch.device("cpu"))
+            model.eval()
+            print(f"Model başarıyla yüklendi: {MODEL_PATH}")
+        except Exception as e:
+            print(f"Model yüklenemedi: {e}")
+            raise HTTPException(status_code=500, detail=f"Model yüklenemedi: {str(e)}")
+    return model
 
 # Görüntü Ön İşleme (Güvenli mod ile)
 def enhance_and_preprocess_image(image_bytes: bytes) -> Image.Image:
     try:
         input_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
 
-        # rembg hata verirse akışı bozmamak için try-except içinde tutuyoruz
         try:
             output_rgba = remove(input_image)
             background = Image.new("RGB", output_rgba.size, (255, 255, 255))
@@ -173,9 +175,10 @@ def enhance_and_preprocess_image(image_bytes: bytes) -> Image.Image:
 
 
 def run_inference(image: Image.Image) -> dict:
+    current_model = get_model()
     input_tensor = transform(image).unsqueeze(0)
     with torch.no_grad():
-        outputs = model(input_tensor)
+        outputs = current_model(input_tensor)
         probabilities = torch.softmax(outputs, dim=1)[0]
 
     predicted_idx = torch.argmax(probabilities).item()
@@ -202,7 +205,6 @@ def run_inference(image: Image.Image) -> dict:
 
 @app.on_event("startup")
 async def startup_event():
-    load_model()
     init_db()
     
     try:
@@ -220,7 +222,7 @@ def root():
 
 @app.get("/health")
 def health():
-    return {"status": "healthy", "model_loaded": model is not None}
+    return {"status": "healthy", "service": "running"}
 
 # Endpoint 1: Dosya yükleme
 @app.post("/predict")
@@ -229,9 +231,6 @@ async def predict(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if model is None:
-        raise HTTPException(status_code=503, detail="Model henüz yüklenmedi")
-
     try:
         contents = await file.read()
     except Exception:
@@ -276,9 +275,6 @@ async def predict_url(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if model is None:
-        raise HTTPException(status_code=503, detail="Model henüz yüklenmedi")
-
     try:
         response = requests.get(body.image_url, timeout=10)
         response.raise_for_status()
@@ -305,7 +301,6 @@ async def predict_url(
     result["image_url"] = body.image_url
     return result
 
-# Render port zaman aşımı sorununu kesin olarak çözen port bağlama bloğu
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))

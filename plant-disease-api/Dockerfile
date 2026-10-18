@@ -23,5 +23,5 @@ COPY efficientnet_plant.pt .
 # Port
 EXPOSE 8000
 
-# Başlatma komutu (Render'ın dinamik PORT değişkenini okuyacak şekilde güncellendi)
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Başlatma komutu
+CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}
