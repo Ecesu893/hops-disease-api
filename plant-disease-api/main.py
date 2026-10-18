@@ -140,29 +140,27 @@ def load_model():
         print(f"Model yüklenemedi: {e}")
         raise
 
-# --- YENİ EKLENEN GÖRÜNTÜ İŞLEME VE ÖN İŞLEME FONKSİYONU ---
+# Görüntü Ön İşleme (Güvenli mod ile)
 def enhance_and_preprocess_image(image_bytes: bytes) -> Image.Image:
-    """
-    1. rembg ile arka planı temizleyip bitkiyi öne çıkarır.
-    2. Pillow ve OpenCV ile ışık/kontrast dengesini ayarlayıp yaprak detaylarını keskinleştirir.
-    """
     try:
         input_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
 
-        # 1. Akıllı Arka Plan Kaldırma
-        output_rgba = remove(input_image)
-        background = Image.new("RGB", output_rgba.size, (255, 255, 255))
-        background.paste(output_rgba, mask=output_rgba.split()[3])
-        processed_img = background
+        # rembg hata verirse akışı bozmamak için try-except içinde tutuyoruz
+        try:
+            output_rgba = remove(input_image)
+            background = Image.new("RGB", output_rgba.size, (255, 255, 255))
+            background.paste(output_rgba, mask=output_rgba.split()[3])
+            processed_img = background
+        except Exception as rembg_err:
+            print(f"rembg atlandı: {rembg_err}")
+            processed_img = input_image
 
-        # 2. Kontrast ve Parlaklık Dengeleme (Güneşli/gölgeli ortamlar için)
         enhancer_contrast = ImageEnhance.Contrast(processed_img)
         processed_img = enhancer_contrast.enhance(1.2)
 
         enhancer_brightness = ImageEnhance.Brightness(processed_img)
         processed_img = enhancer_brightness.enhance(1.05)
 
-        # 3. OpenCV ile Gürültü Azaltma (Denoise)
         open_cv_image = np.array(processed_img)
         open_cv_image = cv2.cvtColor(open_cv_image, cv2.COLOR_RGB2BGR)
         open_cv_image = cv2.GaussianBlur(open_cv_image, (3, 3), 0)
@@ -170,12 +168,11 @@ def enhance_and_preprocess_image(image_bytes: bytes) -> Image.Image:
 
         return final_image
     except Exception as e:
-        print(f"Görüntü ön işleme hatası: {e}, orijinal görsel kullanılıyor.")
+        print(f"Ön işleme hatası: {e}, orijinal görsel kullanılıyor.")
         return Image.open(io.BytesIO(image_bytes)).convert("RGB")
 
 
 def run_inference(image: Image.Image) -> dict:
-    """Ortak tahmin fonksiyonu"""
     input_tensor = transform(image).unsqueeze(0)
     with torch.no_grad():
         outputs = model(input_tensor)
@@ -208,7 +205,6 @@ async def startup_event():
     load_model()
     init_db()
     
-    # Soft delete sütunlarını otomatik ekleyen migration kontrolü
     try:
         with engine.connect() as conn:
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE;"))
@@ -226,7 +222,7 @@ def root():
 def health():
     return {"status": "healthy", "model_loaded": model is not None}
 
-# --- Endpoint 1: Dosya yükleme (Ön işleme eklendi) ---
+# Endpoint 1: Dosya yükleme
 @app.post("/predict")
 async def predict(
     file: UploadFile = File(...),
@@ -241,7 +237,6 @@ async def predict(
     except Exception:
         raise HTTPException(status_code=400, detail="Görsel okunamadı")
 
-    # 1. Dosyayı benzersiz bir isimle uploads klasörüne kaydet (orijinal halini saklıyoruz)
     file_ext = os.path.splitext(file.filename)[1] or ".jpg"
     unique_filename = f"{uuid.uuid4().hex}{file_ext}"
     file_save_path = os.path.join(UPLOAD_DIR, unique_filename)
@@ -249,20 +244,16 @@ async def predict(
     with open(file_save_path, "wb") as f:
         f.write(contents)
 
-    # 2. Dışarıdan erişilebilir tam URL oluştur
     base_url = "https://plant-disease-api-gicm.onrender.com"
     full_image_url = f"{base_url}/uploads/{unique_filename}"
 
-    # 3. Görseli modele vermeden önce arka planı temizle ve ışık/kontrast ayarla
     processed_image = enhance_and_preprocess_image(contents)
 
-    # 4. Modeli çalıştır
     try:
         result = run_inference(processed_image)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Tahmin hatası: {str(e)}")
 
-    # 5. DB'ye kaydet
     record = ScanHistory(
         user_id=current_user.id,
         prediction_class=result["prediction"],
@@ -275,7 +266,7 @@ async def predict(
     result["image_url"] = full_image_url
     return result
 
-# --- Endpoint 2: URL'den görsel (Ön işleme eklendi) ---
+# Endpoint 2: URL'den görsel
 class ImageURLRequest(BaseModel):
     image_url: str
 
@@ -295,7 +286,6 @@ async def predict_url(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Görsel indirilemedi: {str(e)}")
 
-    # Arka planı temizle ve optimize et
     processed_image = enhance_and_preprocess_image(image_bytes)
 
     try:
@@ -314,3 +304,9 @@ async def predict_url(
 
     result["image_url"] = body.image_url
     return result
+
+# Render port zaman aşımı sorununu kesin olarak çözen port bağlama bloğu
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
