@@ -125,7 +125,7 @@ transform = transforms.Compose([
                          std=[0.229, 0.224, 0.225])
 ])
 
-# Model Yükleme (Lazy Loading: İlk istekte yüklenecek, sunucu açılışını geciktirmeyecek)
+# Model Yükleme (Lazy Loading)
 MODEL_PATH = os.environ.get("MODEL_PATH", "efficientnet_plant.pt")
 model = None
 
@@ -142,7 +142,7 @@ def get_model():
             raise HTTPException(status_code=500, detail=f"Model yüklenemedi: {str(e)}")
     return model
 
-# Görüntü Ön İşleme (Pillow ve OpenCV ile Hızlı ve Güvenli Optimizasyon)
+# Görüntü Ön İşleme (Pillow ve OpenCV ile İyileştirme)
 def enhance_and_preprocess_image(image_bytes: bytes) -> Image.Image:
     try:
         input_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
@@ -216,7 +216,7 @@ def root():
 def health():
     return {"status": "healthy", "service": "running"}
 
-# Endpoint 1: Dosya yükleme
+# Endpoint 1: Dosya yükleme (Orijinal + İşlenmiş Görsel URL Desteği)
 @app.post("/predict")
 async def predict(
     file: UploadFile = File(...),
@@ -228,6 +228,7 @@ async def predict(
     except Exception:
         raise HTTPException(status_code=400, detail="Görsel okunamadı")
 
+    # 1. Orijinal dosyayı kaydet
     file_ext = os.path.splitext(file.filename)[1] or ".jpg"
     unique_filename = f"{uuid.uuid4().hex}{file_ext}"
     file_save_path = os.path.join(UPLOAD_DIR, unique_filename)
@@ -238,13 +239,22 @@ async def predict(
     base_url = "https://plant-disease-api-gicm.onrender.com"
     full_image_url = f"{base_url}/uploads/{unique_filename}"
 
+    # 2. Ön işleme yap (Görseli iyileştir)
     processed_image = enhance_and_preprocess_image(contents)
 
+    # 3. İşlenmiş görseli de sunucuya kaydet
+    processed_filename = f"processed_{unique_filename}"
+    processed_save_path = os.path.join(UPLOAD_DIR, processed_filename)
+    processed_image.save(processed_save_path, quality=95)
+    full_processed_image_url = f"{base_url}/uploads/{processed_filename}"
+
+    # 4. Tahmini çalıştır
     try:
         result = run_inference(processed_image)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Tahmin hatası: {str(e)}")
 
+    # 5. Veritabanına kaydet
     record = ScanHistory(
         user_id=current_user.id,
         prediction_class=result["prediction"],
@@ -254,7 +264,9 @@ async def predict(
     db.add(record)
     db.commit()
 
+    # 6. Yanıta orijinal ve işlenmiş görsel URL'lerini ekle
     result["image_url"] = full_image_url
+    result["processed_image_url"] = full_processed_image_url
     return result
 
 # Endpoint 2: URL'den görsel
@@ -276,6 +288,15 @@ async def predict_url(
 
     processed_image = enhance_and_preprocess_image(image_bytes)
 
+    # İşlenmiş görseli URL senaryosu için de kaydedelim
+    unique_filename = f"{uuid.uuid4().hex}.jpg"
+    processed_filename = f"processed_{unique_filename}"
+    processed_save_path = os.path.join(UPLOAD_DIR, processed_filename)
+    processed_image.save(processed_save_path, quality=95)
+
+    base_url = "https://plant-disease-api-gicm.onrender.com"
+    full_processed_image_url = f"{base_url}/uploads/{processed_filename}"
+
     try:
         result = run_inference(processed_image)
     except Exception as e:
@@ -291,6 +312,7 @@ async def predict_url(
     db.commit()
 
     result["image_url"] = body.image_url
+    result["processed_image_url"] = full_processed_image_url
     return result
 
 if __name__ == "__main__":
